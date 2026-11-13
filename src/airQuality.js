@@ -129,6 +129,22 @@ export function aggregateAreaReadings(readings) {
   };
 }
 
+// Each place-name lookup gets this long before we give up on it, so the app
+// can't get stuck on "Finding a nearby place name…" if a service hangs.
+const LOOKUP_TIMEOUT_MS = 8000;
+
+function lookupSignal(signal) {
+  const timeout = AbortSignal.timeout(LOOKUP_TIMEOUT_MS);
+  if (!signal) return timeout;
+  return typeof AbortSignal.any === "function" ? AbortSignal.any([signal, timeout]) : signal;
+}
+
+// Photon calls a neighbourhood "district" (e.g. Kasba Peth in Pune), so it is
+// checked along with the other locality fields.
+const photonLocality = (place) =>
+  place.neighbourhood || place.suburb || place.locality || place.district || place.city_district;
+const photonCity = (place) => place.city || place.town || place.village || place.county;
+
 export async function reverseGeocode(latitude, longitude, signal) {
   const photonParams = new URLSearchParams({
     lat: String(latitude),
@@ -136,48 +152,56 @@ export async function reverseGeocode(latitude, longitude, signal) {
     lang: "en",
     limit: "5",
   });
+  // A city-level name from Photon, kept in case Nominatim can't be reached
+  let photonCityOnly = null;
   try {
-    const result = await getJson(`https://photon.komoot.io/reverse?${photonParams}`, signal);
+    const result = await getJson(`https://photon.komoot.io/reverse?${photonParams}`, lookupSignal(signal));
     const candidates = (result.features ?? []).map((feature) => feature.properties).filter(Boolean);
     const place = candidates.find((candidate) => {
-      const city = candidate.city || candidate.town || candidate.village;
-      const locality = candidate.neighbourhood || candidate.suburb || candidate.locality || candidate.city_district;
-      return locality && locality.toLowerCase() !== city?.toLowerCase();
-    }) ?? candidates[0];
+      const locality = photonLocality(candidate);
+      return locality && locality.toLowerCase() !== photonCity(candidate)?.toLowerCase();
+    }) ?? candidates.find((candidate) => photonCity(candidate)) ?? candidates[0];
     if (place) {
-      const city = place.city || place.town || place.village;
-      const locality = place.neighbourhood || place.suburb || place.locality || place.city_district;
+      const city = photonCity(place);
+      const locality = photonLocality(place);
       const distinctLocality = locality && locality.toLowerCase() !== city?.toLowerCase() ? locality : null;
-      if (distinctLocality) {
-        return {
-          label: [distinctLocality, city].filter(Boolean).join(", "),
-          region: [place.state, place.country].filter(Boolean).join(", "),
-          street: place.street || "",
-        };
-      }
+      const answer = {
+        label: [distinctLocality, city].filter(Boolean).join(", "),
+        region: [place.state, place.country].filter(Boolean).join(", "),
+        street: place.street || "",
+      };
+      if (distinctLocality) return answer;
+      if (city) photonCityOnly = answer;
     }
   } catch (error) {
     if (signal?.aborted) throw error;
   }
 
-  const nominatimParams = new URLSearchParams({
-    lat: String(latitude),
-    lon: String(longitude),
-    format: "jsonv2",
-    zoom: "16",
-    addressdetails: "1",
-  });
-  const result = await getJson(`https://nominatim.openstreetmap.org/reverse?${nominatimParams}`, signal);
-  const address = result.address ?? {};
-  const city = address.city || address.town || address.village || address.municipality;
-  const locality = address.neighbourhood || address.city_district || address.residential || address.suburb;
-  const distinctLocality = locality && locality.toLowerCase() !== city?.toLowerCase() ? locality : null;
-  const region = address.state;
-  return {
-    label: [distinctLocality, city].filter(Boolean).join(", ") || region || "Nearby location",
-    region: [region, address.country].filter(Boolean).join(", "),
-    street: address.road || "",
-  };
+  // Nominatim often knows a finer area name. It limits how often browsers may
+  // call it, so if it fails we still show Photon's city rather than no name.
+  try {
+    const nominatimParams = new URLSearchParams({
+      lat: String(latitude),
+      lon: String(longitude),
+      format: "jsonv2",
+      zoom: "16",
+      addressdetails: "1",
+    });
+    const result = await getJson(`https://nominatim.openstreetmap.org/reverse?${nominatimParams}`, lookupSignal(signal));
+    const address = result.address ?? {};
+    const city = address.city || address.town || address.village || address.municipality;
+    const locality = address.neighbourhood || address.city_district || address.residential || address.suburb;
+    const distinctLocality = locality && locality.toLowerCase() !== city?.toLowerCase() ? locality : null;
+    const region = address.state;
+    return {
+      label: [distinctLocality, city].filter(Boolean).join(", ") || region || "Nearby location",
+      region: [region, address.country].filter(Boolean).join(", "),
+      street: address.road || "",
+    };
+  } catch (error) {
+    if (photonCityOnly && !signal?.aborted) return photonCityOnly;
+    throw error;
+  }
 }
 
 export async function fetchWeather(location, signal) {

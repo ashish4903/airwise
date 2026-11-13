@@ -791,36 +791,56 @@ function App() {
     }
     setIsLocating(true);
     setLocationMessage("Waiting for location permission…");
+    const onPosition = ({ coords }) => {
+      const coordinates = { latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy };
+      setLocationMessage("Finding a nearby place name…");
+      reverseGeocode(coords.latitude, coords.longitude)
+        .then(({ label, region, street }) => {
+          if (locationRequestId.current !== requestId) return;
+          setDeviceLocation({ ...coordinates, label, region, street, source: "device" });
+          setLocationMessage(`Using ${label}. Air quality is estimated for a nearby area.`);
+          setIsLocating(false);
+        })
+        .catch(() => {
+          if (locationRequestId.current !== requestId) return;
+          setDeviceLocation({ ...coordinates, label: "Nearby area", region: "" });
+          setLocationMessage("Place name unavailable. Showing an air-quality estimate for your location.");
+          setIsLocating(false);
+        });
+    };
+
+    const showError = (error) => {
+      if (locationRequestId.current !== requestId) return;
+      setIsLocating(false);
+      const messages = {
+        1: "Location is blocked for this site. Allow it in your browser's site settings (the icon next to the address bar), then try again, or choose an area from the list.",
+        2: "Your location could not be determined. Please try again or choose an area.",
+        3: "Location request timed out. Please try again or choose an area.",
+      };
+      setLocationMessage("");
+      setLocationError(messages[error.code] || "Unable to get your location. Choose an area instead.");
+    };
+
+    // A precise GPS fix first. Laptops without GPS and phones indoors often
+    // can't give one (unavailable or timed out), so then retry once with a
+    // quicker, approximate position (Wi-Fi or network based), which is plenty
+    // for an area-level air-quality estimate.
     navigator.geolocation.getCurrentPosition(
-      ({ coords }) => {
-        const coordinates = { latitude: coords.latitude, longitude: coords.longitude, accuracy: coords.accuracy };
-        setLocationMessage("Finding a nearby place name…");
-        reverseGeocode(coords.latitude, coords.longitude)
-          .then(({ label, region, street }) => {
-            if (locationRequestId.current !== requestId) return;
-            setDeviceLocation({ ...coordinates, label, region, street, source: "device" });
-            setLocationMessage(`Using ${label}. Air quality is estimated for a nearby area.`);
-            setIsLocating(false);
-          })
-          .catch(() => {
-            if (locationRequestId.current !== requestId) return;
-            setDeviceLocation({ ...coordinates, label: "Nearby area", region: "" });
-            setLocationMessage("Place name unavailable. Showing an air-quality estimate for your location.");
-            setIsLocating(false);
-          });
-      },
+      onPosition,
       (error) => {
         if (locationRequestId.current !== requestId) return;
-        setIsLocating(false);
-        const messages = {
-          1: "Location permission was denied. You can choose an area from the list instead.",
-          2: "Your location could not be determined. Please try again or choose an area.",
-          3: "Location request timed out. Please try again.",
-        };
-        setLocationMessage("");
-        setLocationError(messages[error.code] || "Unable to get your location. Choose an area instead.");
+        if (error.code === 1) {
+          showError(error);
+          return;
+        }
+        setLocationMessage("Trying a quicker, approximate location…");
+        navigator.geolocation.getCurrentPosition(onPosition, showError, {
+          enableHighAccuracy: false,
+          timeout: 15000,
+          maximumAge: 10 * 60 * 1000,
+        });
       },
-      { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60 * 1000 },
     );
   }
 
