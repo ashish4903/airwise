@@ -31,16 +31,18 @@ async function getJson(url, signal) {
   return data;
 }
 
-function airQualityUrl(locations) {
+function airQualityUrl(locations, includeHourly = true) {
   const params = new URLSearchParams({
     latitude: locations.map(({ latitude }) => latitude).join(","),
     longitude: locations.map(({ longitude }) => longitude).join(","),
     current: CURRENT_AIR_VARIABLES,
-    hourly: HOURLY_AIR_VARIABLES,
-    past_days: "7",
-    forecast_days: "5",
     timezone: "auto",
   });
+  if (includeHourly) {
+    params.set("hourly", HOURLY_AIR_VARIABLES);
+    params.set("past_days", "7");
+    params.set("forecast_days", "5");
+  }
   return `${AIR_QUALITY_URL}?${params}`;
 }
 
@@ -54,18 +56,7 @@ export async function fetchAirQuality(location, signal) {
 }
 
 export async function fetchAreaAirQuality(areas, signal, includeForecast = false) {
-  const params = new URLSearchParams({
-    latitude: areas.map(({ latitude }) => latitude).join(","),
-    longitude: areas.map(({ longitude }) => longitude).join(","),
-    current: CURRENT_AIR_VARIABLES,
-    timezone: "auto",
-  });
-  if (includeForecast) {
-    params.set("hourly", HOURLY_AIR_VARIABLES);
-    params.set("past_days", "7");
-    params.set("forecast_days", "5");
-  }
-  const result = await getJson(`${AIR_QUALITY_URL}?${params}`, signal);
+  const result = await getJson(airQualityUrl(areas, includeForecast), signal);
   const readings = Array.isArray(result) ? result : [result];
   if (readings.length !== areas.length || readings.some((reading) => !reading.current)) {
     throw new Error("The provider returned incomplete readings for Pune areas. Please try again.");
@@ -201,6 +192,21 @@ export function aqiCategory(aqi) {
   if (aqi <= 200) return { label: "Unhealthy", tone: "unhealthy" };
   if (aqi <= 300) return { label: "Very unhealthy", tone: "very-unhealthy" };
   return { label: "Hazardous", tone: "hazardous" };
+}
+
+/** US AQI category boundaries, drawn as equal-width segments on the AQI scale bar. */
+export const AQI_BREAKPOINTS = [0, 50, 100, 150, 200, 300, 500];
+export const AQI_SCALE_TONES = ["good", "moderate", "sensitive", "unhealthy", "very-unhealthy", "hazardous"];
+
+/** Position (0–100%) of an AQI value on the equal-segment category scale. */
+export function aqiScalePosition(aqi) {
+  if (!Number.isFinite(aqi)) return null;
+  const value = Math.min(Math.max(aqi, 0), 500);
+  const segment = Math.max(0, AQI_BREAKPOINTS.findIndex((limit) => value <= limit) - 1);
+  const low = AQI_BREAKPOINTS[segment];
+  const high = AQI_BREAKPOINTS[segment + 1];
+  const segmentWidth = 100 / (AQI_BREAKPOINTS.length - 1);
+  return Number((segment * segmentWidth + ((value - low) / (high - low)) * segmentWidth).toFixed(2));
 }
 
 export function localTime(value) {
