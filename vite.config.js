@@ -5,11 +5,13 @@ const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1];
 
 export default defineConfig({
   plugins: [react()],
-  base: process.env.GITHUB_ACTIONS === "true" && repositoryName ? `/${repositoryName}/` : "/",
+  // VITE_BASE overrides the base path, e.g. "/" for local previews in CI (Playwright, Lighthouse).
+  base: process.env.VITE_BASE ?? (process.env.GITHUB_ACTIONS === "true" && repositoryName ? `/${repositoryName}/` : "/"),
   test: {
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test/setup.js"],
+    include: ["src/**/*.test.{js,jsx}"],
     css: false,
     coverage: {
       provider: "v8",

@@ -63,18 +63,44 @@ What would prove or disprove it:
 
 ### Phase 2 — Validate the core loop (next 4–6 weeks)
 
-- Privacy-friendly analytics and the in-app PMF survey from section 3.
-- **Shareable "today" card** (image or link) for WhatsApp, the main channel in Pune.
-- **Activity presets:** *Run*, *Kids outdoors*, *Commute*. Each re-ranks the best windows with persona-specific thresholds.
-- **PWA:** install to the home screen, offline last reading, fast repeat loads.
-- Usability sessions with 5–8 residents (parents, runners, people with asthma) on the new Overview.
+Built:
+
+- ✅ **Measurement.** This consists of:
+  - privacy-friendly, Plausible-compatible events: page views, preset choice, card shares, plan downloads and shares, alerts turned on, and a bucketed "time to answer"
+  - the in-app PMF survey, asked from the third visit and snoozed for 30 days if dismissed
+
+  Both are off until `PLAUSIBLE_DOMAIN` is set, and they send no locations, place names or identifiers.
+- ✅ **Shareable "today" card.** A 1080×1080 PNG for WhatsApp, built on the device. It falls back to a text summary.
+- ✅ **Activity presets.** *Running*, *Kids outdoors*, *Commute* and *Everyone*, each with realistic time slots and AQI limits. The choice is remembered.
+- ✅ **Honest area comparisons.**
+  - Areas with identical model estimates are labelled, and comparisons say when two areas cannot differ.
+  - The Pune average now counts all 12 areas. Grouping by the provider's coarse coordinates had left it averaging only 4.
+
+Next:
+
+- **PWA:** install to the home screen, offline last reading, fast repeat loads. This is also the foundation for background alerts.
+- Usability sessions with 5–8 residents (parents, runners, people with asthma) on the new Overview, the presets and the share card.
+- Native-speaker review of the Marathi and Hindi copy.
 
 ### Phase 3 — Retention (6–12 weeks)
 
-- **Real alerts:** opt-in web push when a saved place crosses the user's threshold or a clean window opens.
-- **Official station data:** CPCB/MPCB monitor readings next to model estimates, with station distance and time. This is the most-requested trust signal for any AQI product in India.
-- Saved places synced across devices (optional account).
-- Marathi and Hindi translations.
+Built:
+
+- ✅ **Official station data.** The nearest CPCB/MPCB monitors (via OpenAQ) appear next to the model estimate, with distance, update time and a staleness flag, and as markers on the map. They are fetched at deploy time with a server-side key and refreshed every two hours.
+- ✅ **Alerts, first step.** An in-app banner and opt-in browser notifications fire when the reading crosses your level, in either direction, while Airwise is open.
+- ✅ **Marathi and Hindi** for the core experience. Action-plan content is still English-only, and the app says so.
+
+Next:
+
+- **Background alerts:** web push through the PWA plus a small push service, covering saved places as well as the current one.
+- Saved places and alert settings synced across devices (optional account).
+- Translate the Take action content once the copy is stable.
+
+### Quality gates (built)
+
+- ✅ Playwright end-to-end tests on desktop, tablet and phone viewports, with all network mocked.
+- ✅ axe WCAG 2.2 A/AA checks on every section in light and dark mode. These caught and fixed two real contrast bugs: the category pill and the goal badge.
+- ✅ Lighthouse budgets in CI: accessibility ≥ 95, best practices ≥ 90, SEO ≥ 90, CLS ≤ 0.1. Performance only warns.
 
 ### Phase 4 — Civic workflow (only if Phase 2 data supports it)
 
@@ -85,8 +111,9 @@ What would prove or disprove it:
 
 | Risk | Mitigation |
 | --- | --- |
-| Model estimates differ from official monitors and users lose trust | Phase 3 adds station data side by side. Keep the "model estimate" labels visible. |
-| Neighbouring areas share a grid cell, so the map looks "all the same" | Say so plainly in the UI (done). Prioritise station data and finer models over more pins. |
+| Model estimates differ from official monitors and users lose trust | Station readings now sit side by side with the estimate, with a note that some difference is normal. Keep the "model estimate" labels visible. |
+| Neighbouring areas get identical model values, so the map looks "all the same" | Say so plainly in the UI (done). Prioritise station data and finer models over more pins. |
+| Station data depends on OpenAQ's free tier and CPCB uptime | The panel hides itself when data is missing; stale readings are flagged; the deploy never fails over station data. |
 | Health guidance read as medical advice | Keep the AirNow-based wording and the "not medical advice" footer. Have a clinician review the copy before alerts launch. |
 | Open-Meteo commercial terms | Review pricing and attribution before any monetised launch. |
 
@@ -98,7 +125,8 @@ npm run dev            # local dev server
 npm run lint           # ESLint
 npm test               # Vitest, once
 npm run test:coverage  # with coverage thresholds (80% lines/statements/functions, 70% branches)
-npm run check          # lint + coverage + build, same as CI
+npm run check          # lint + coverage + build, same as CI's first job
+npm run test:e2e       # Playwright + axe (run `npx playwright install chromium` once)
 ```
 
 Every pull request runs `.github/workflows/ci.yml`. Pushes to `main` run the same checks again before `deploy.yml` publishes to GitHub Pages.
