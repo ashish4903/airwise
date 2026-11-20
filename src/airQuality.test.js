@@ -55,17 +55,18 @@ describe("aqiScalePosition", () => {
 });
 
 describe("aggregateAreaReadings", () => {
-  it("averages unique model grid points only", () => {
+  it("averages every area, even when the provider reports the same cell coordinates", () => {
+    // Open-Meteo returns coarse cell centres: areas can share coordinates but differ in value.
     const readings = [
-      airReading({ latitude: 18.5, longitude: 73.8, aqi: 100 }),
-      airReading({ latitude: 18.5, longitude: 73.8, aqi: 100 }), // same grid cell, counted once
-      airReading({ latitude: 18.6, longitude: 73.9, aqi: 141 }),
+      airReading({ latitude: 18.6, longitude: 73.8, aqi: 100 }),
+      airReading({ latitude: 18.6, longitude: 73.8, aqi: 100 }),
+      airReading({ latitude: 18.6, longitude: 73.8, aqi: 160 }),
     ];
     const summary = aggregateAreaReadings(readings);
     expect(summary.areaCount).toBe(3);
-    expect(summary.modelGridCount).toBe(2);
-    expect(summary.current.us_aqi).toBeCloseTo(120.5);
-    expect(summary.hourly.us_aqi[0]).toBeCloseTo(120.5);
+    expect(summary.distinctEstimates).toBe(2);
+    expect(summary.current.us_aqi).toBeCloseTo(120);
+    expect(summary.hourly.us_aqi[0]).toBeCloseTo(120);
     expect(summary.current.time).toBe(readings[0].current.time);
   });
 

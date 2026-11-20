@@ -1,17 +1,20 @@
 import { Activity, AlertTriangle, CircleHelp, Route, Wind } from "lucide-react";
 import { aqiCategory } from "../airQuality.js";
+import { useI18n } from "../i18n/index.jsx";
 import { roundedAqi } from "../lib/format.js";
 
 export const ICONS = { activity: Activity, route: Route, wind: Wind };
 
 /** Rounded AQI with its category colour. `showLabel` adds the category name. */
 export function AqiBadge({ value, showLabel = false, size = "md" }) {
+  const { t } = useI18n();
   const category = aqiCategory(value);
+  const label = t(`aqi.${category.tone}`);
   const rounded = roundedAqi(value);
   return (
     <span className={`aqi-badge aqi-badge-${size} tone-${category.tone}`}>
       <b>{rounded ?? "—"}</b>
-      {showLabel ? <span>{category.label}</span> : <span className="visually-hidden"> US AQI, {category.label}</span>}
+      {showLabel ? <span>{label}</span> : <span className="visually-hidden"> US AQI, {label}</span>}
     </span>
   );
 }
@@ -42,12 +45,13 @@ export function LoadingNotice({ children }) {
   return <div className="notice notice-loading" role="status"><span className="spinner" aria-hidden="true" />{children}</div>;
 }
 
-export function ErrorNotice({ title, message, onRetry, retryLabel = "Try again" }) {
+export function ErrorNotice({ title, message, onRetry, retryLabel }) {
+  const { t } = useI18n();
   return (
     <div className="notice notice-error" role="alert">
       <AlertTriangle size={18} aria-hidden="true" />
       <div><strong>{title}</strong><span>{message}</span></div>
-      {onRetry && <button type="button" className="button button-secondary" onClick={onRetry}>{retryLabel}</button>}
+      {onRetry && <button type="button" className="button button-secondary" onClick={onRetry}>{retryLabel ?? t("common.retry")}</button>}
     </div>
   );
 }
@@ -67,7 +71,7 @@ export function DataAttribution() {
       <span>
         Air quality and weather are model estimates from <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> (CAMS).
         Area names use <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap data</a>.
-        Resolution is regional, not street-level; nearby areas may share a grid cell. Not a substitute for official monitoring or health advice.
+        Resolution is regional, not street-level; nearby areas can get identical estimates. Not a substitute for official monitoring or health advice.
       </span>
     </p>
   );

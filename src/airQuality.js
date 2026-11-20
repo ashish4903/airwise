@@ -1,3 +1,5 @@
+import { readingSignature } from "./lib/cells.js";
+
 const AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const CURRENT_AIR_VARIABLES = "us_aqi,us_aqi_pm2_5,us_aqi_pm10,us_aqi_nitrogen_dioxide,us_aqi_ozone,pm2_5,pm10,nitrogen_dioxide,ozone";
@@ -68,10 +70,9 @@ export function aggregateAreaReadings(readings) {
   if (readings.length === 0 || readings.some((reading) => !reading.current)) {
     throw new Error("Complete area readings are required to calculate a Pune-wide average.");
   }
-  const uniqueReadings = [...new Map(readings.map((reading) => [
-    `${reading.latitude},${reading.longitude}`,
-    reading,
-  ])).values()];
+  // Every area counts once. Readings used to be de-duplicated by the coordinates Open-Meteo
+  // returns, but those are coarse cell centres shared by areas with different values, so that
+  // silently dropped most areas from the average.
   const average = (values) => {
     const available = values.filter(Number.isFinite);
     return available.length ? available.reduce((sum, value) => sum + value, 0) / available.length : null;
@@ -89,11 +90,11 @@ export function aggregateAreaReadings(readings) {
   ];
   const current = Object.fromEntries(currentKeys.map((key) => [
     key,
-    average(uniqueReadings.map((reading) => reading.current[key])),
+    average(readings.map((reading) => reading.current[key])),
   ]));
-  const timestamps = uniqueReadings.map((reading) => reading.current.time).sort();
+  const timestamps = readings.map((reading) => reading.current.time).sort();
   current.time = timestamps[timestamps.length - 1];
-  const hourlyReadings = uniqueReadings.filter((reading) => reading.hourly?.time);
+  const hourlyReadings = readings.filter((reading) => reading.hourly?.time);
   const hourly = hourlyReadings.length
     ? {
       time: hourlyReadings[0].hourly.time,
@@ -116,7 +117,7 @@ export function aggregateAreaReadings(readings) {
     current,
     hourly,
     areaCount: readings.length,
-    modelGridCount: uniqueReadings.length,
+    distinctEstimates: new Set(readings.map(readingSignature)).size,
   };
 }
 

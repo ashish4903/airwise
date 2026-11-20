@@ -7,6 +7,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
+  sessionStorage.clear();
+  vi.unstubAllEnvs();
   delete document.documentElement.dataset.theme;
 });
 
@@ -24,3 +26,6 @@ if (!window.matchMedia) {
   });
 }
 window.scrollTo = () => {};
+
+// jsdom has no canvas; returning null exercises the text-share fallback without console noise.
+HTMLCanvasElement.prototype.getContext = () => null;

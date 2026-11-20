@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  aqiCategory,
   aggregateAreaReadings,
   fetchAirQuality,
   fetchAreaAirQuality,
@@ -9,15 +10,24 @@ import {
   reverseGeocode,
 } from "./airQuality.js";
 import { generateAreaActionSuggestions } from "./areaActionPlan.js";
+import { AlertBanner } from "./components/notices.jsx";
 import { LocationBar, SECTIONS, Sidebar, TabBar, TopBar } from "./components/Shell.jsx";
 import { ErrorNotice, LoadingNotice, Skeleton } from "./components/ui.jsx";
+import { useAlerts } from "./hooks/useAlerts.js";
 import { useNow } from "./hooks/useNow.js";
+import { useStations } from "./hooks/useStations.js";
+import { useSurvey } from "./hooks/useSurvey.js";
 import { useTheme } from "./hooks/useTheme.js";
+import { I18nProvider, useI18n } from "./i18n/index.jsx";
+import { ACTIVITY_STORAGE_KEY, bestWindow, DEFAULT_ACTIVITY, getActivity } from "./lib/activities.js";
+import { analyticsConfig, secondsBucket, track } from "./lib/analytics.js";
+import { cellSiblings, modelCells } from "./lib/cells.js";
 import { formatFreshness, roundedAqi } from "./lib/format.js";
 import { forecastOutlook, upcomingHours } from "./lib/forecast.js";
 import { getOverviewInsight, makeRecommendations } from "./lib/insights.js";
 import { locationKey, parseSavedLocations, SAVED_PLACES_KEY, sameSavedPlace } from "./lib/places.js";
 import { buildPlanText, planFileName } from "./lib/plan.js";
+import { nearestStations } from "./lib/stations.js";
 import { ForecastView } from "./views/ForecastView.jsx";
 import { NeighborhoodsView } from "./views/NeighborhoodsView.jsx";
 import { OverviewView } from "./views/OverviewView.jsx";
@@ -26,15 +36,27 @@ import { TakeActionView } from "./views/TakeActionView.jsx";
 const AUTO_REFRESH_MS = 30 * 60 * 1000;
 
 const INTROS = {
-  Overview: (label, citywide) => (citywide ? "How the air is across Pune right now, and the best time to be outside." : `How the air is near ${label} right now, and the best time to be outside.`),
-  Forecast: () => "When the air may be cleaner or more polluted over the next five days.",
-  Neighborhoods: () => "Compare model estimates across Pune areas.",
-  "Take action": (label) => `Protect yourself today and plan local steps for ${label}.`,
+  Overview: (t, place, citywide) => (citywide ? t("intro.overviewCity") : t("intro.overviewArea", { place })),
+  Forecast: (t) => t("intro.forecast"),
+  Neighborhoods: (t) => t("intro.areas"),
+  "Take action": (t, place) => t("intro.act", { place }),
 };
+const APP_START = typeof performance === "undefined" ? Date.now() : performance.now();
+
+function readActivity() {
+  try {
+    return getActivity(localStorage.getItem(ACTIVITY_STORAGE_KEY) ?? DEFAULT_ACTIVITY).id;
+  } catch {
+    return DEFAULT_ACTIVITY;
+  }
+}
 
 function App() {
+  const { t, lang, locale } = useI18n();
   const { theme, toggleTheme } = useTheme();
   const now = useNow();
+  const [activity, setActivity] = useState(readActivity);
+  const [analytics] = useState(analyticsConfig);
   const [section, setSection] = useState("Overview");
   const [areaName, setAreaName] = useState(PUNE_CITY.name);
   const [deviceLocation, setDeviceLocation] = useState(null);
@@ -56,7 +78,6 @@ function App() {
   const [targetAqi, setTargetAqi] = useState("50");
   const [plan, setPlan] = useState(null);
   const [search, setSearch] = useState("");
-  const [threshold, setThreshold] = useState(100);
   const [savedLocations, setSavedLocations] = useState([]);
   const [savedLocationsReady, setSavedLocationsReady] = useState(false);
   const [savedLocationError, setSavedLocationError] = useState("");
@@ -82,9 +103,40 @@ function App() {
   );
   const recommendations = useMemo(() => makeRecommendations(air), [air]);
   const insight = useMemo(() => getOverviewInsight(air), [air]);
-  const outlook = useMemo(() => forecastOutlook(upcomingHours(air?.hourly, air?.current?.time, 24)), [air]);
+  const next24 = useMemo(() => upcomingHours(air?.hourly, air?.current?.time, 24), [air]);
+  const outlook = useMemo(() => forecastOutlook(next24), [next24]);
+  const bestTime = useMemo(() => bestWindow(next24, activity), [next24, activity]);
+  const cells = useMemo(
+    () => (areaReadings.length === PUNE_AREAS.length ? modelCells(PUNE_AREAS, areaReadings) : null),
+    [areaReadings],
+  );
+  const stations = useStations(refreshKey);
+  const nearbyStations = useMemo(
+    () => (stations ? nearestStations(stations.stations, location) : []),
+    // `location` is derived from currentLocationId.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stations, currentLocationId],
+  );
   const currentAqi = roundedAqi(air?.current?.us_aqi);
-  const freshness = formatFreshness(air?.current?.time, air?.utc_offset_seconds, now);
+  const freshness = formatFreshness(air?.current?.time, air?.utc_offset_seconds, now, t);
+  const trackEvent = useCallback((name, props) => track(name, { props: { lang, ...props }, config: analytics }), [lang, analytics]);
+  const describeAlert = useCallback((event, details) => {
+    const category = t(`aqi.${aqiCategory(details.aqi).tone}`);
+    return event === "above"
+      ? { title: t("alerts.notifyAboveTitle", details), body: t("alerts.notifyAboveBody", { ...details, category, headline: t(`health.${aqiCategory(details.aqi).tone}.headline`) }) }
+      : { title: t("alerts.notifyBelowTitle", details), body: t("alerts.notifyBelowBody", { ...details, category }) };
+  }, [t]);
+  const alerts = useAlerts({
+    placeId: isCitywide ? "pune-city" : currentLocationId,
+    placeLabel: locationLabel,
+    aqi: isLoading ? null : air?.current?.us_aqi,
+    describe: describeAlert,
+    onEnabled: useCallback(() => trackEvent("Alerts enabled"), [trackEvent]),
+  });
+  const survey = useSurvey({
+    enabled: Boolean(analytics.domain),
+    onAnswer: useCallback((answer) => trackEvent("PMF survey", { answer }), [trackEvent]),
+  });
   const numericTarget = Number(targetAqi);
   const goalValue = targetAqi === "" ? null : Number.isFinite(numericTarget) ? Math.max(0, Math.min(500, numericTarget)) : 50;
   const goalGap = currentAqi == null || goalValue == null ? null : Math.max(0, currentAqi - goalValue);
@@ -211,6 +263,32 @@ function App() {
   // A comparison is a snapshot of specific readings; drop it when those readings change.
   useEffect(() => setComparisonReport(null), [areaReadings]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVITY_STORAGE_KEY, activity);
+    } catch {
+      // The preset still applies for this visit.
+    }
+  }, [activity]);
+
+  useEffect(() => {
+    track("pageview", { section, config: analytics });
+  }, [section, analytics]);
+
+  // "Time to answer": how long until the first best-time answer is on screen (bucketed).
+  const answerTracked = useRef(false);
+  useEffect(() => {
+    if (answerTracked.current || section !== "Overview" || isLoading || !bestTime) return;
+    answerTracked.current = true;
+    const elapsed = (typeof performance === "undefined" ? Date.now() : performance.now()) - APP_START;
+    trackEvent("Answer shown", { seconds: secondsBucket(elapsed) });
+  }, [section, isLoading, bestTime, trackEvent]);
+
+  function changeActivity(id) {
+    setActivity(id);
+    trackEvent("Activity preset", { activity: id });
+  }
+
   function navigate(id) {
     setSection(id);
     window.scrollTo?.({ top: 0, behavior: "smooth" });
@@ -322,6 +400,7 @@ function App() {
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     setPlanShareMessage("Plan downloaded. You can print it or attach it to a message.");
+    trackEvent("Plan downloaded");
   }
 
   async function sharePlan() {
@@ -330,6 +409,7 @@ function App() {
       if (navigator.share) {
         await navigator.share({ title: `Airwise action plan — ${locationLabel}`, text });
         setPlanShareMessage("Your plan is ready to share.");
+        trackEvent("Plan shared");
       } else if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
         setPlanShareMessage("Plan copied. Paste it into a message to share.");
@@ -342,11 +422,12 @@ function App() {
   }
 
   const sectionInfo = SECTIONS.find((item) => item.id === section);
-  const title = section === "Overview" ? (isCitywide ? "Pune air quality" : `Air near ${locationLabel}`) : sectionInfo.fullLabel ?? sectionInfo.label;
-  const displayDate = new Intl.DateTimeFormat("en-IN", { weekday: "long", month: "long", day: "numeric", timeZone: "Asia/Kolkata" }).format(new Date(now));
+  const placeTitle = isCitywide ? t("page.titleCity") : t("page.titleArea", { place: locationLabel });
+  const title = section === "Overview" ? placeTitle : t(sectionInfo.key);
+  const displayDate = new Intl.DateTimeFormat(locale, { weekday: "long", month: "long", day: "numeric", timeZone: "Asia/Kolkata" }).format(new Date(now));
   const needsAir = section === "Overview" || section === "Forecast";
   const activeArea = deviceLocation || isCitywide ? null : areaName;
-  const locationDetail = [deviceLocation?.street, deviceLocation?.region || "Pune, Maharashtra", deviceLocation?.accuracy ? `±${Math.round(deviceLocation.accuracy)} m` : ""].filter(Boolean).join(" · ");
+  const locationDetail = [deviceLocation?.street, deviceLocation?.region || t("sidebar.region"), deviceLocation?.accuracy ? `±${Math.round(deviceLocation.accuracy)} m` : ""].filter(Boolean).join(" · ");
 
   return (
     <div className="app">
@@ -354,22 +435,21 @@ function App() {
       <Sidebar section={section} onNavigate={navigate} locationLabel={locationLabel} locationDetail={locationDetail} />
       <div className="app-main">
         <TopBar
-          title={sectionInfo.fullLabel ?? sectionInfo.label}
-          status={airError ? { ok: false, label: "Data unavailable" } : { ok: true, label: "Model estimate" }}
+          title={t(sectionInfo.key)}
+          statusOk={!airError}
           isLoading={isLoading}
           onRefresh={refresh}
           theme={theme}
           onToggleTheme={toggleTheme}
-          aqi={air?.current?.us_aqi}
-          threshold={threshold}
-          onThresholdChange={setThreshold}
+          aqi={isLoading ? null : air?.current?.us_aqi}
+          alerts={alerts}
         />
         <main id="main" className="page">
           <header className="page-header">
             <div>
-              <p className="eyebrow">{displayDate} · {deviceLocation ? "Your area" : "Pune"}</p>
+              <p className="eyebrow">{displayDate} · {t(deviceLocation ? "page.eyebrowYourArea" : "page.eyebrowPune")}</p>
               <h1>{title}</h1>
-              <p className="page-intro">{INTROS[section](locationLabel, isCitywide)}</p>
+              <p className="page-intro">{INTROS[section](t, locationLabel, isCitywide)}</p>
             </div>
             <LocationBar
               deviceLocation={deviceLocation}
@@ -387,18 +467,19 @@ function App() {
             <div className={`notice ${locationError ? "notice-error" : "notice-info"}`} role={locationError ? "alert" : "status"}>{locationError || locationMessage}</div>
           )}
           {savedLocationError && <div className="notice notice-error" role="alert">{savedLocationError}</div>}
+          <AlertBanner banner={alerts.banner} onDismiss={alerts.dismissBanner} />
 
           {needsAir && isLoading && (
             <>
-              <LoadingNotice>Loading air-quality and weather data for {locationLabel}…</LoadingNotice>
+              <LoadingNotice>{t("page.loading", { place: locationLabel })}</LoadingNotice>
               <Skeleton height={260} />
             </>
           )}
           {needsAir && airError && !air && (
-            <ErrorNotice title="Air-quality data could not be loaded" message={airError} onRetry={refresh} />
+            <ErrorNotice title={t("page.errorTitle")} message={airError} onRetry={refresh} />
           )}
           {needsAir && airError && air && (
-            <ErrorNotice title="Showing the last loaded reading" message={airError} onRetry={refresh} />
+            <ErrorNotice title={t("page.staleTitle")} message={airError} onRetry={refresh} />
           )}
 
           {section === "Overview" && !isLoading && air && (
@@ -414,10 +495,31 @@ function App() {
               activeArea={activeArea}
               onSelectArea={chooseArea}
               onNavigate={navigate}
+              activity={activity}
+              onActivityChange={changeActivity}
+              bestTime={bestTime}
+              cells={cells}
+              sharedWith={activeArea ? cellSiblings(cells, activeArea) : []}
+              displayDate={displayDate}
+              title={placeTitle}
+              onShared={(result) => trackEvent("Card shared", { method: result })}
+              stations={stations}
+              nearbyStations={nearbyStations}
+              survey={survey}
+              now={now}
             />
           )}
           {section === "Forecast" && !isLoading && air && (
-            <ForecastView air={air} weather={weather} weatherError={weatherError} locationLabel={locationLabel} outlook={outlook} />
+            <ForecastView
+              air={air}
+              weather={weather}
+              weatherError={weatherError}
+              locationLabel={locationLabel}
+              outlook={outlook}
+              activity={activity}
+              onActivityChange={changeActivity}
+              bestTime={bestTime}
+            />
           )}
           {section === "Neighborhoods" && (
             <NeighborhoodsView
@@ -438,6 +540,7 @@ function App() {
               comparisonReady={comparisonReady}
               onCompare={() => setComparisonReport(comparisonReadings.map(({ name, reading }) => ({ name, aqi: Math.round(reading.us_aqi) })))}
               comparisonReport={comparisonReport}
+              cells={cells}
             />
           )}
           {section === "Take action" && (
@@ -464,9 +567,9 @@ function App() {
           )}
 
           <footer className="page-footer">
-            <span><span className={`status-dot ${airError ? "offline" : ""}`} aria-hidden="true" />{airError ? "Air-quality update unavailable" : `Model data · ${freshness}`}</span>
-            <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">How this estimate is made</a>
-            <span>For information only — not medical advice.</span>
+            <span><span className={`status-dot ${airError ? "offline" : ""}`} aria-hidden="true" />{airError ? t("footer.offline") : t("footer.ok", { freshness })}</span>
+            <a href="https://open-meteo.com/en/docs/air-quality-api" target="_blank" rel="noreferrer">{t("footer.how")}</a>
+            <span>{t("footer.notMedical")}</span>
           </footer>
         </main>
       </div>
@@ -475,4 +578,10 @@ function App() {
   );
 }
 
-export default App;
+export default function AppRoot() {
+  return (
+    <I18nProvider>
+      <App />
+    </I18nProvider>
+  );
+}

@@ -27,20 +27,33 @@ export function formatTrendLabel(value, period) {
   return period === "24h" ? formatModelHour(value) : formatModelDate(value);
 }
 
-/** Relative age of a model timestamp given in the location's local time. */
-export function formatFreshness(localTimestamp, offsetSeconds = 0, now = Date.now()) {
-  if (!localTimestamp) return "Update time unavailable";
+const FRESHNESS_EN = {
+  "fresh.unavailable": () => "Update time unavailable",
+  "fresh.at": ({ time }) => `Model update ${time}`,
+  "fresh.now": () => "Updated just now",
+  "fresh.minutes": ({ minutes }) => `Updated ${minutes} min ago`,
+  "fresh.hours": ({ hours, minutes }) => `Updated ${hours}h ${minutes}m ago`,
+  "fresh.days": ({ days }) => `Updated ${days}d ago`,
+};
+const englishFreshness = (key, vars) => FRESHNESS_EN[key](vars ?? {});
+
+/**
+ * Relative age of a model timestamp given in the location's local time.
+ * `t` is an i18n translate function; English is used without one.
+ */
+export function formatFreshness(localTimestamp, offsetSeconds = 0, now = Date.now(), t = englishFreshness) {
+  if (!localTimestamp) return t("fresh.unavailable");
   const offsetHours = Math.trunc(offsetSeconds / 3600);
   const offsetMinutes = Math.abs(Math.trunc((offsetSeconds % 3600) / 60));
   const sign = offsetSeconds < 0 ? "-" : "+";
   const offset = `${sign}${String(Math.abs(offsetHours)).padStart(2, "0")}:${String(offsetMinutes).padStart(2, "0")}`;
   const updatedAt = new Date(`${localTimestamp}${offset}`);
-  if (Number.isNaN(updatedAt.getTime())) return `Model update ${localTimestamp.replace("T", " ")}`;
+  if (Number.isNaN(updatedAt.getTime())) return t("fresh.at", { time: localTimestamp.replace("T", " ") });
   const minutes = Math.max(0, Math.floor((now - updatedAt.getTime()) / 60000));
-  if (minutes < 1) return "Updated just now";
-  if (minutes < 60) return `Updated ${minutes} min ago`;
+  if (minutes < 1) return t("fresh.now");
+  if (minutes < 60) return t("fresh.minutes", { minutes });
   const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `Updated ${hours}h ${minutes % 60}m ago` : `Updated ${Math.floor(hours / 24)}d ago`;
+  return hours < 24 ? t("fresh.hours", { hours, minutes: minutes % 60 }) : t("fresh.days", { days: Math.floor(hours / 24) });
 }
 
 /** "2026-11-20T15:00" -> "3 PM, 20 Nov". */

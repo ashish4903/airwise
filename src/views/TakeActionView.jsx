@@ -4,6 +4,7 @@ import { aqiCategory } from "../airQuality.js";
 import { healthGuidance } from "../lib/health.js";
 import { RecommendationCard } from "../components/panels.jsx";
 import { AqiBadge, Card, CardHeader, Caveat, DataAttribution, ErrorNotice } from "../components/ui.jsx";
+import { useI18n } from "../i18n/index.jsx";
 
 function ProtectionSection({ aqi, locationLabel }) {
   const health = healthGuidance(aqi);
@@ -89,10 +90,12 @@ export function TakeActionView({
   onGenerate, plan, planIsCurrent, onShare, onDownload, shareMessage,
   recommendations, search, onSearch, onRetry,
 }) {
+  const { lang, t } = useI18n();
   const visible = recommendations.filter((action) =>
     `${action.title} ${action.detail} ${action.type}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <div className="view">
+      {lang !== "en" && <div className="notice notice-info" role="note" lang={lang}>{t("act.englishOnly")}</div>}
       <Card className="goal-card">
         <CardHeader
           eyebrow="Area air-quality goal"
